@@ -9,6 +9,7 @@ using System.Net.Sockets;
 using System.Threading;
 using UnityEngine.UI;
 using UnityEngine.Events;
+using System.Security.Cryptography;
 
 public class ChatClient : MonoBehaviour
 {
@@ -88,7 +89,7 @@ public class ChatClient : MonoBehaviour
 
             string s = "I accept your connection";
             stream.Write(Encoding.ASCII.GetBytes(s), 0, s.Length);
-
+            
             //This call blocks;
             if(stream.DataAvailable)
             {
@@ -166,6 +167,22 @@ public class ChatClient : MonoBehaviour
     public ushort remoteUdpPort;
     public ushort localTcpListenPort;
     private string password;
+
+    private string pubKey = "<RSAKeyValue><Modulus>pDG3M3tqtkzx17ayJaLEa7LM1lBIEoDI6q23BZlXqDc2ckU5QStq7VC/LhdBrUv8pNMHgstKcezn4f1hWBMEUq/K6HoTUuG3BD/yLErM8vIVxSMp5kLiFbgvw18dr0m17Z43UTIjMrBqss8jP/Eqz6yvfcxWsb6jhBn8WgLYxD0=</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>";
+    public TcpClient myTcpClient;
+    public NetworkStream netStream;
+    CryptoStream CryptStreamRead;
+    CryptoStream CryptStreamWrite;
+    StreamReader SReader;
+    StreamWriter SWriter;
+    RijndaelManaged RM;
+    byte[] myKey;
+    byte[] myIV;
+
+    //Awaiting server to send back connection Confirmation
+    private bool phase1;
+    
+    private bool phase2;
 
     public InputField Uname;
     public InputField Pwd;
@@ -305,6 +322,11 @@ public class ChatClient : MonoBehaviour
             return;
         }
         Debug.Log("Send UdpServer a login request: " + Encoding.ASCII.GetString(msg));
+    }
+
+    public void SignUp()
+    {
+
     }
 
     void QuitRequsetCallback(IAsyncResult result)
@@ -477,7 +499,7 @@ public class ChatClient : MonoBehaviour
         users = new Dictionary<string, UserItem>();
         udpClient = new UdpClient();
 
-        Uname.text = "Yu Hugang";
+        Uname.text = "YuHugang";
         ServerIP.text = "localhost";
         ServerPort.text = "7777";
         ListenPort.text = "11000";
@@ -485,11 +507,107 @@ public class ChatClient : MonoBehaviour
         shouldTcpListen = false;
         shouldReceive = false;
         udpMessageReceived = false;
-        
+        phase1 = false;
+        phase2 = false;
+        receiveBuffer = new byte[512];
+
         receiveCount = 0;
 	}
 
-    private int ccount;
+    public static byte[] SymetricEncrypt(byte[] data, int dataLength, byte[] Key, byte[] IV)
+    {
+        RijndaelManaged RMCrypto = new RijndaelManaged();
+        MemoryStream memoryStream = new MemoryStream();
+        CryptoStream cryptoStream = new CryptoStream(memoryStream, RMCrypto.CreateEncryptor(Key, IV), CryptoStreamMode.Write);
+        cryptoStream.Write(data, 0, dataLength);
+        cryptoStream.FlushFinalBlock();
+        return memoryStream.ToArray();
+    }
+
+    public static byte[] SymetricDecrypt(byte[] data, int dataLength, byte[] Key, byte[] IV)
+    {
+        RijndaelManaged RMCrypto = new RijndaelManaged();
+        MemoryStream memoryStream = new MemoryStream();
+        CryptoStream cryptoStream = new CryptoStream(memoryStream, RMCrypto.CreateDecryptor(Key, IV), CryptoStreamMode.Write);
+        cryptoStream.Write(data, 0, dataLength);
+        cryptoStream.FlushFinalBlock();
+        return memoryStream.ToArray();
+    }
+
+    void ConnectServer()
+    {
+        RSACryptoServiceProvider rsa = new RSACryptoServiceProvider();
+        rsa.FromXmlString(pubKey);
+
+        RM = new RijndaelManaged();
+        myKey = RM.Key;
+        myIV = RM.IV;
+        byte[] EncryptedSymmetricKey;
+        byte[] EncryptedSymmetricIV;
+        EncryptedSymmetricKey = rsa.Encrypt(myKey, false);
+        EncryptedSymmetricIV = rsa.Encrypt(myIV, false);
+        myTcpClient = new TcpClient("localhost", 11000);
+        netStream = myTcpClient.GetStream();
+
+        byte[] prefix = System.BitConverter.GetBytes((int)19950114);
+        byte[] keyLength = System.BitConverter.GetBytes(myKey.Length);
+        byte[] IVLength = System.BitConverter.GetBytes(myIV.Length);
+        byte[] EnKeyLength = System.BitConverter.GetBytes(EncryptedSymmetricKey.Length);
+        byte[] EnIVLength = System.BitConverter.GetBytes(EncryptedSymmetricIV.Length);
+        byte[] message = new byte[1024];
+        prefix.CopyTo(message, 0);
+        keyLength.CopyTo(message, 4);
+        IVLength.CopyTo(message, 8);
+        EnKeyLength.CopyTo(message, 12);
+        EnIVLength.CopyTo(message, 16);
+        EncryptedSymmetricKey.CopyTo(message, 20);
+        EncryptedSymmetricIV.CopyTo(message, 20 + EncryptedSymmetricKey.Length);
+        Debug.Log("KL " + myKey.Length + ", IVL " + myIV.Length + ", enKL " + EncryptedSymmetricKey.Length + ", enIVL " + EncryptedSymmetricIV.Length);
+        netStream.Write(message, 0, message.Length);
+        Debug.Log("Assymetric key sent");
+        phase1 = true;
+    }
+
+    void CreateCryptoStream()
+    {
+        //byte[] Key = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16 };
+        //byte[] IV = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16 };
+
+        //CryptStreamRead = new CryptoStream(
+        //    netStream,
+        //    RM.CreateDecryptor(Key, IV),
+        //    CryptoStreamMode.Read);
+        //CryptStreamWrite = new CryptoStream(netStream,
+        //    RM.CreateEncryptor(Key, IV),
+        //    CryptoStreamMode.Write);
+
+        CryptStreamRead = new CryptoStream(
+            netStream,
+            RM.CreateDecryptor(RM.Key, RM.IV),
+            CryptoStreamMode.Read);
+        CryptStreamWrite = new CryptoStream(netStream,
+            RM.CreateEncryptor(RM.Key, RM.IV),
+            CryptoStreamMode.Write);
+
+
+        SReader = new StreamReader(CryptStreamRead);
+        SWriter = new StreamWriter(CryptStreamWrite);
+
+        phase1 = true;
+    }
+
+    void OnGUI()
+    {
+        if (GUI.Button(new Rect(20, 20, 80, 20), "Connect"))
+        {
+            ConnectServer();
+        }
+        if (GUI.Button(new Rect(20, 50, 80, 20), "CryptStream"))
+        {
+            CreateCryptoStream();
+        }
+    }
+
     //void OnGUI()
     //{
     //    if(GUI.Button(new Rect(20, 20, 80, 20), "Login"))
@@ -533,38 +651,77 @@ public class ChatClient : MonoBehaviour
     //}
 
     private int receiveCount;
+    byte[] receiveBuffer;
+
+    void sReadCallback(IAsyncResult result)
+    {
+        int numRead = CryptStreamRead.EndRead(result);
+        string s = Encoding.ASCII.GetString(receiveBuffer);
+        Debug.Log("Read " + numRead + " bytes of security data: " + s);
+        phase2 = true;
+    }
 
     // Update is called once per frame
     void Update ()
     {
-        Debug.Log("shouldTcpReceive" + shouldTcpListen);
-        Debug.Log("Conversations.count : " + conversations.Count);
-		if(shouldReceive)
+        if(phase1)
         {
-            udpClient.BeginReceive(new AsyncCallback(UdpReceiveCallback), udpClient);
-            shouldReceive = false;
+            Debug.Log("Awaiting Server to send back connection confirmation");
+            if (netStream.DataAvailable)
+            {
+                Debug.Log("netStream Data Available");
+                int numRead = netStream.Read(receiveBuffer, 0, receiveBuffer.Length);
+                byte[] decryptedMessage = SymetricDecrypt(receiveBuffer, numRead, myKey, myIV);
+                string s = Encoding.ASCII.GetString(decryptedMessage);
+                Debug.Log("Read " + numRead + " bytes of security data: " + s);
+                if (string.Equals(s, "Connection Permitted") == true)
+                {
+                    Debug.Log("Connection Success!");
+                    phase1 = false;
+                    phase2 = true;
+                }
+                else
+                {
+                    Debug.Log("Connection Denied: " + s);
+                    phase1 = false;
+                }
+            }
         }
-        if(udpMessageReceived)
+        if(false)
         {
-            ProcessUdpMessage();
+            phase2 = false;
+            CryptStreamRead.BeginRead(receiveBuffer, 0, receiveBuffer.Length, new AsyncCallback(sReadCallback), CryptStreamRead);
         }
-        if(shouldTcpListen)
-        {
-            Debug.Log("TcpLisnter BeginAccept times: " + ++receiveCount);
-            tcpListener.BeginAcceptTcpClient(new AsyncCallback(AcceptTcpCallback), tcpListener);
-            shouldTcpListen = false;
-        }
+
+
+  //      Debug.Log("shouldTcpReceive" + shouldTcpListen);
+  //      Debug.Log("Conversations.count : " + conversations.Count);
+  //	  if(shouldReceive)
+  //      {
+  //          udpClient.BeginReceive(new AsyncCallback(UdpReceiveCallback), udpClient);
+  //          shouldReceive = false;
+  //      }
+  //      if(udpMessageReceived)
+  //      {
+  //          ProcessUdpMessage();
+  //      }
+  //      if(shouldTcpListen)
+  //      {
+  //          Debug.Log("TcpLisnter BeginAccept times: " + ++receiveCount);
+  //          tcpListener.BeginAcceptTcpClient(new AsyncCallback(AcceptTcpCallback), tcpListener);
+  //          shouldTcpListen = false;
+  //      }
         
-        foreach(var c in conversations)
-        {
-            if(!c.UICreated)
-            {
-                c.SetupUI();
-            }
-            if(c.stream.DataAvailable)
-            {
-                c.Read();
-            }
-        }
+  //      foreach(var c in conversations)
+  //      {
+  //          if(!c.UICreated)
+  //          {
+  //              c.SetupUI();
+  //          }
+  //          if(c.stream.DataAvailable)
+  //          {
+  //              c.Read();
+  //          }
+  //      }
 	}
 }
