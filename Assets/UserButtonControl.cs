@@ -13,7 +13,7 @@ public class UserButtonControl : MonoBehaviour {
     {
         userItem = _userItem;
         username.text = userItem.userName;
-        endpoint.text = userItem.ip.ToString() + " : " + userItem.port.ToString();
+//        endpoint.text = userItem.ip.ToString() + " : " + userItem.port.ToString();
     }
 
     public void buttonPressed()

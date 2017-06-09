@@ -13,6 +13,30 @@ using System.Security.Cryptography;
 
 public class ChatClient : MonoBehaviour
 {
+    enum StoCHeader
+    {
+        LoginSuccess = 1,
+        SignUpSuccess = 2,
+        LoginFail = 3,
+        SignUpFail = 4,
+        AddFriendSuccess = 5,
+        AddFriendFail = 6,
+        RenewFriend = 7,
+        IncomingText = 8,
+        FriendOnline = 9,
+        FriendOffline = 10,
+    }
+
+    enum CtoSHeader
+    {
+        Login = 1,
+        SignUp = 2,
+        AddFriend = 3,
+        SendText = 4,
+        SignOut = 5,
+        Connection = 19950114,
+    }
+
     public class UserItem
     {
         public IPAddress ip;
@@ -22,6 +46,14 @@ public class ChatClient : MonoBehaviour
         public Conversation convers;
         public ChatClient chatClient;
         public bool chatStarted;
+
+        public UserItem(string _userName, ChatClient _chatClient)
+        {
+            userName = _userName;
+            chatClient = _chatClient;
+            userButton = null;
+            chatStarted = false;
+        }
 
         public UserItem(IPAddress _ip, ushort _port, string _userName, ChatClient _chatClient)
         {
@@ -50,8 +82,8 @@ public class ChatClient : MonoBehaviour
 
     public class Conversation
     {
-        public TcpClient tcpClient;
-        public NetworkStream stream;
+//        public TcpClient tcpClient;
+//        public NetworkStream stream;
         public UserItem userItem;
         public string remoteName;
         public ushort remotePort;
@@ -63,8 +95,8 @@ public class ChatClient : MonoBehaviour
         public Conversation(TcpClient c, ChatClient _chatClient)
         {
             UICreated = false;
-            tcpClient = c;
-            stream = c.GetStream();
+//            tcpClient = c;
+//            stream = c.GetStream();
             userItem = null;
             chatClient = _chatClient;
             dialog = null;
@@ -74,7 +106,7 @@ public class ChatClient : MonoBehaviour
         public Conversation(TcpClient c, string _remoteName, ushort _remotePort, ChatClient _chatClient)
         {
             UICreated = false;
-            tcpClient = c;
+//            tcpClient = c;
             remoteName = _remoteName;
             remotePort = _remotePort;
             userItem = null;
@@ -88,18 +120,18 @@ public class ChatClient : MonoBehaviour
             byte[] buffer = new byte[20];
 
             string s = "I accept your connection";
-            stream.Write(Encoding.ASCII.GetBytes(s), 0, s.Length);
+//            stream.Write(Encoding.ASCII.GetBytes(s), 0, s.Length);
             
             //This call blocks;
-            if(stream.DataAvailable)
-            {
-                int bytes = stream.Read(buffer, 0, buffer.Length);
-                //remotePort = System.BitConverter.ToUInt16(buffer, 0);
-                remoteName = Encoding.Default.GetString(buffer, 0, 20);
+            //if(stream.DataAvailable)
+            //{
+            //    int bytes = stream.Read(buffer, 0, buffer.Length);
+            //    //remotePort = System.BitConverter.ToUInt16(buffer, 0);
+            //    remoteName = Encoding.Default.GetString(buffer, 0, 20);
                 
-                Debug.Log("ConfirmMsg from : " + " RemoteEP:" + tcpClient.Client.RemoteEndPoint.ToString() 
-                     + " ListenPort: " + remotePort  +" says " + remoteName);
-            }
+            //    //Debug.Log("ConfirmMsg from : " + " RemoteEP:" + tcpClient.Client.RemoteEndPoint.ToString() 
+            //    //     + " ListenPort: " + remotePort  +" says " + remoteName);
+            //}
         }
 
         public void SetupUI()
@@ -126,7 +158,7 @@ public class ChatClient : MonoBehaviour
         {
             try
             {
-                stream.EndWrite(result);
+//                stream.EndWrite(result);
             }
             catch(Exception e)
             {
@@ -138,27 +170,39 @@ public class ChatClient : MonoBehaviour
 
         public void Send(string s)
         {
-            byte[] buffer = Encoding.Default.GetBytes(s);
-            try
-            {
-                stream.BeginWrite(buffer, 0, buffer.Length, new AsyncCallback(SendCallbcak), stream);
-            }
-            catch(Exception e)
-            {
-                Debug.Log("BeginWrite Failed : " + e.ToString());
-                return;
-            }
+            byte[] header = System.BitConverter.GetBytes((int)CtoSHeader.SendText);
+            byte[] fromUname = Encoding.Default.GetBytes(remoteName);
+            byte[] fromUnameL = BitConverter.GetBytes(fromUname.Length);
+            byte[] textBytes = Encoding.Default.GetBytes(s);
+            byte[] buffer = new byte[4 + 4 + fromUname.Length + textBytes.Length];
+            header.CopyTo(buffer, 0);
+            fromUnameL.CopyTo(buffer, 4);
+            fromUname.CopyTo(buffer, 8);
+            textBytes.CopyTo(buffer, 8 + fromUname.Length);
+            byte[] cbuffer = SymetricEncrypt(buffer, buffer.Length, chatClient.myKey, chatClient.myIV);
+            chatClient.netStream.Write(cbuffer, 0, cbuffer.Length);
+
+            //byte[] buffer = Encoding.Default.GetBytes(s);
+            //try
+            //{
+            //    stream.BeginWrite(buffer, 0, buffer.Length, new AsyncCallback(SendCallbcak), stream);
+            //}
+            //catch(Exception e)
+            //{
+            //    Debug.Log("BeginWrite Failed : " + e.ToString());
+            //    return;
+            //}
             
             Debug.Log("Send "   + s + " at " + System.DateTime.Now + " : " + remoteName   );
         }
 
-        public void Read()
+        public void Read(string s)
         {
-            byte[] buffer = new byte[256];
-            int bytes = stream.Read(buffer, 0, buffer.Length);
-            string s = Encoding.Default.GetString(buffer);
+            //byte[] buffer = new byte[256];
+            //int bytes = stream.Read(buffer, 0, buffer.Length);
+            //string s = Encoding.Default.GetString(buffer);
             dialog.readMessage(s);
-            Debug.Log("Read from Remote user : " +  s + " at " + System.DateTime.Now + " says: " +remoteName);
+            Debug.Log("Read from Remote user : " +  remoteName + " at " + System.DateTime.Now + " says: " + s);
         }
     }
 
@@ -178,11 +222,10 @@ public class ChatClient : MonoBehaviour
     RijndaelManaged RM;
     byte[] myKey;
     byte[] myIV;
+    byte[] receiveBuffer;
 
     //Awaiting server to send back connection Confirmation
-    private bool phase1;
-    
-    private bool phase2;
+    private int phase;
 
     public InputField Uname;
     public InputField Pwd;
@@ -255,78 +298,50 @@ public class ChatClient : MonoBehaviour
 
     public void Login()
     {
-        if (Init() != 0)
-        {
-            Debug.Log("Init error");
-            return;
-        }
-
-        shouldReceive = false;
-        AsyncCallback callback = new AsyncCallback(LoginRequestCallback);
-        try
-        {
-//            udpClient.Connect(remoteUdpAddress, remoteUdpPort);
-        }
-        catch(ObjectDisposedException e)
-        {
-            PrintError("UdpClient is closed, please reboot system and try again: " + e.ToString());
-            return;
-        }
-        catch(SocketException e)
-        {
-            PrintError("Error Socket: " + e.ToString());
-            return;
-        }
-
-        Debug.Log("Begin make message");
-
-        byte[] msg = new byte[24];
-        msg[0] = 0x01;
-        byte[] port = new byte[2];
-        byte[] usr = Encoding.ASCII.GetBytes(userName);
-        port = System.BitConverter.GetBytes(localTcpListenPort);
-        port.CopyTo(msg, 1);
-        try
-        {
-            usr.CopyTo(msg, 3);
-            msg[usr.Length + 3] = 0x00;
-        }
-        catch (ArgumentOutOfRangeException e)
-        {
-            Debug.Log("user name is too long, please change it and try again." + e.ToString());
-            return;
-        }
-
-        Debug.Log("Begin UdpSend");
-
-        try
-        {
-            IPAddress ipAddress = IPAddress.Any;
-            foreach (var add in Dns.GetHostEntry(remoteUdpAddress).AddressList)
-            {
-                if (add.AddressFamily == AddressFamily.InterNetwork)
-                {
-                    ipAddress = add;
-                    break;
-                }
-            }
-            IPEndPoint ipRemoteEndPoint = new IPEndPoint(ipAddress, remoteUdpPort);
-            udpClient.BeginSend(msg, 23, ipRemoteEndPoint, callback, udpClient);
-
-            //            udpClient.BeginSend(msg, 23, "localhost", 7777, callback, udpClient);
-            //            udpClient.BeginSend(msg, 23, callback, udpClient);
-        }
-        catch (Exception e)
-        {
-            Debug.Log("udpClient.BeginSend failed." + e.ToString());
-            return;
-        }
-        Debug.Log("Send UdpServer a login request: " + Encoding.ASCII.GetString(msg));
+        phase = 0;
+        userName = Uname.text;
+        password = Pwd.text;
+        remoteUdpAddress = ServerIP.text;
+        remoteUdpPort = ushort.Parse(ServerPort.text);
+        byte[] header = BitConverter.GetBytes((int)CtoSHeader.Login);
+        byte[] nameBytes = Encoding.Default.GetBytes(userName);
+        byte[] pwdBytes = Encoding.Default.GetBytes(password);
+        byte[] nameL = BitConverter.GetBytes(nameBytes.Length);
+        byte[] pwdL = BitConverter.GetBytes(pwdBytes.Length);
+        byte[] bufferS = new byte[12 + nameBytes.Length + pwdBytes.Length];
+        header.CopyTo(bufferS, 0);
+        nameL.CopyTo(bufferS, 4);
+        pwdL.CopyTo(bufferS, 8);
+        nameBytes.CopyTo(bufferS, 12);
+        pwdBytes.CopyTo(bufferS, 12 + nameBytes.Length);
+        byte[] cbuffer = SymetricEncrypt(bufferS, bufferS.Length, myKey, myIV);
+        netStream.Write(cbuffer, 0, cbuffer.Length);
+        Console.WriteLine("Send Login Request!");
+        phase = 3;
     }
 
     public void SignUp()
     {
-
+        phase = 0;
+        userName = Uname.text;
+        password = Pwd.text;
+        remoteUdpAddress = ServerIP.text;
+        remoteUdpPort = ushort.Parse(ServerPort.text);
+        byte[] header = BitConverter.GetBytes((int)CtoSHeader.SignUp);
+        byte[] nameBytes = Encoding.Default.GetBytes(userName);
+        byte[] pwdBytes = Encoding.Default.GetBytes(password);
+        byte[] nameL = BitConverter.GetBytes(nameBytes.Length);
+        byte[] pwdL = BitConverter.GetBytes(pwdBytes.Length);
+        byte[] bufferS = new byte[12 + nameBytes.Length + pwdBytes.Length];
+        header.CopyTo(bufferS, 0);
+        nameL.CopyTo(bufferS, 4);
+        pwdL.CopyTo(bufferS, 8);
+        nameBytes.CopyTo(bufferS, 12);
+        pwdBytes.CopyTo(bufferS, 12 + nameBytes.Length);
+        byte[] cbuffer = SymetricEncrypt(bufferS, bufferS.Length, myKey, myIV);
+        netStream.Write(cbuffer, 0, cbuffer.Length);
+        Console.WriteLine("Send Sign Up Request!");
+        phase = 4;
     }
 
     void QuitRequsetCallback(IAsyncResult result)
@@ -337,6 +352,13 @@ public class ChatClient : MonoBehaviour
 
     public void Quit()
     {
+        byte[] quitBytes = BitConverter.GetBytes((int)CtoSHeader.SignOut);
+        byte[] cBuffer = SymetricEncrypt(quitBytes, quitBytes.Length, myKey, myIV);
+        netStream.Write(cBuffer, 0, cBuffer.Length);
+        netStream.Close();
+        myTcpClient.Close();
+        return;
+
         shouldReceive = false;
         shouldTcpListen = false;
         byte[] msg = new byte[1];
@@ -464,7 +486,7 @@ public class ChatClient : MonoBehaviour
     void BeginConversationCallback(IAsyncResult result)
     {
         Conversation conversation = (Conversation)result.AsyncState; 
-        conversation.tcpClient.EndConnect(result);
+//        conversation.tcpClient.EndConnect(result);
         byte[] buffer = new byte[22];
 
         //To cope with the new request, we don't need the following line
@@ -472,10 +494,10 @@ public class ChatClient : MonoBehaviour
 
 
         Encoding.Default.GetBytes(userName).CopyTo(buffer, 0);
-        conversation.stream = conversation.tcpClient.GetStream();
+//        conversation.stream = conversation.tcpClient.GetStream();
 
         //The new version of this homework doesn't require this initial request which would cause an error in the client benchmark, which is provided by TA.
-        conversation.stream.Write(buffer, 0, 20);
+//        conversation.stream.Write(buffer, 0, 20);
 
         lock (conversations)
         {
@@ -485,53 +507,61 @@ public class ChatClient : MonoBehaviour
 
     void BeginConversation(UserItem peer)
     {
-        TcpClient c = new TcpClient();
-        Conversation conversation = new Conversation(c, peer.userName, peer.port, this);
+//        TcpClient c = new TcpClient();
+        Conversation conversation = new Conversation(null, peer.userName, 0, this);
         conversation.userItem = peer;
         conversation.userItem.convers = conversation;
-        c.BeginConnect(peer.ip, peer.port, new AsyncCallback(BeginConversationCallback), conversation);
+        conversations.Add(conversation);
+        conversation.SetupUI();
+        //c.BeginConnect(peer.ip, peer.port, new AsyncCallback(BeginConversationCallback), conversation);
     }
 
     // Use this for initialization
     void Start ()
     {
-        conversations = new List<Conversation>();
-        users = new Dictionary<string, UserItem>();
         udpClient = new UdpClient();
-
+        
         Uname.text = "YuHugang";
         ServerIP.text = "localhost";
-        ServerPort.text = "7777";
-        ListenPort.text = "11000";
+        ServerPort.text = "11000";
 
         shouldTcpListen = false;
         shouldReceive = false;
         udpMessageReceived = false;
-        phase1 = false;
-        phase2 = false;
-        receiveBuffer = new byte[512];
-
         receiveCount = 0;
+
+        conversations = new List<Conversation>();
+        users = new Dictionary<string, UserItem>();
+        phase = 0;
+        receiveBuffer = new byte[1024];
+
+        
 	}
 
     public static byte[] SymetricEncrypt(byte[] data, int dataLength, byte[] Key, byte[] IV)
     {
         RijndaelManaged RMCrypto = new RijndaelManaged();
+        RMCrypto.Padding = PaddingMode.ANSIX923;
         MemoryStream memoryStream = new MemoryStream();
         CryptoStream cryptoStream = new CryptoStream(memoryStream, RMCrypto.CreateEncryptor(Key, IV), CryptoStreamMode.Write);
         cryptoStream.Write(data, 0, dataLength);
         cryptoStream.FlushFinalBlock();
-        return memoryStream.ToArray();
+        byte[] result = memoryStream.ToArray();
+        Console.WriteLine("Encrypted data Length: " + result.Length);
+        return result;
     }
 
     public static byte[] SymetricDecrypt(byte[] data, int dataLength, byte[] Key, byte[] IV)
     {
         RijndaelManaged RMCrypto = new RijndaelManaged();
+        RMCrypto.Padding = PaddingMode.ANSIX923;
         MemoryStream memoryStream = new MemoryStream();
         CryptoStream cryptoStream = new CryptoStream(memoryStream, RMCrypto.CreateDecryptor(Key, IV), CryptoStreamMode.Write);
         cryptoStream.Write(data, 0, dataLength);
         cryptoStream.FlushFinalBlock();
-        return memoryStream.ToArray();
+        byte[] result = memoryStream.ToArray();
+        Console.WriteLine("Decrypted data Length: " + result.Length);
+        return result;
     }
 
     void ConnectServer()
@@ -565,35 +595,7 @@ public class ChatClient : MonoBehaviour
         Debug.Log("KL " + myKey.Length + ", IVL " + myIV.Length + ", enKL " + EncryptedSymmetricKey.Length + ", enIVL " + EncryptedSymmetricIV.Length);
         netStream.Write(message, 0, message.Length);
         Debug.Log("Assymetric key sent");
-        phase1 = true;
-    }
-
-    void CreateCryptoStream()
-    {
-        //byte[] Key = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16 };
-        //byte[] IV = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16 };
-
-        //CryptStreamRead = new CryptoStream(
-        //    netStream,
-        //    RM.CreateDecryptor(Key, IV),
-        //    CryptoStreamMode.Read);
-        //CryptStreamWrite = new CryptoStream(netStream,
-        //    RM.CreateEncryptor(Key, IV),
-        //    CryptoStreamMode.Write);
-
-        CryptStreamRead = new CryptoStream(
-            netStream,
-            RM.CreateDecryptor(RM.Key, RM.IV),
-            CryptoStreamMode.Read);
-        CryptStreamWrite = new CryptoStream(netStream,
-            RM.CreateEncryptor(RM.Key, RM.IV),
-            CryptoStreamMode.Write);
-
-
-        SReader = new StreamReader(CryptStreamRead);
-        SWriter = new StreamWriter(CryptStreamWrite);
-
-        phase1 = true;
+        phase = 1;
     }
 
     void OnGUI()
@@ -601,10 +603,6 @@ public class ChatClient : MonoBehaviour
         if (GUI.Button(new Rect(20, 20, 80, 20), "Connect"))
         {
             ConnectServer();
-        }
-        if (GUI.Button(new Rect(20, 50, 80, 20), "CryptStream"))
-        {
-            CreateCryptoStream();
         }
     }
 
@@ -651,46 +649,202 @@ public class ChatClient : MonoBehaviour
     //}
 
     private int receiveCount;
-    byte[] receiveBuffer;
+    
 
     void sReadCallback(IAsyncResult result)
     {
         int numRead = CryptStreamRead.EndRead(result);
         string s = Encoding.ASCII.GetString(receiveBuffer);
         Debug.Log("Read " + numRead + " bytes of security data: " + s);
-        phase2 = true;
+        phase = 2;
     }
 
     // Update is called once per frame
     void Update ()
     {
-        if(phase1)
+        if(phase == 1)
         {
-            Debug.Log("Awaiting Server to send back connection confirmation");
+            Debug.Log("Phase 1: Awaiting Server to send back connection confirmation");
             if (netStream.DataAvailable)
             {
                 Debug.Log("netStream Data Available");
                 int numRead = netStream.Read(receiveBuffer, 0, receiveBuffer.Length);
+                Debug.Log("Phase1 numRead: " + numRead);
                 byte[] decryptedMessage = SymetricDecrypt(receiveBuffer, numRead, myKey, myIV);
                 string s = Encoding.ASCII.GetString(decryptedMessage);
                 Debug.Log("Read " + numRead + " bytes of security data: " + s);
                 if (string.Equals(s, "Connection Permitted") == true)
                 {
                     Debug.Log("Connection Success!");
-                    phase1 = false;
-                    phase2 = true;
+                    phase = 2;
                 }
                 else
                 {
                     Debug.Log("Connection Denied: " + s);
-                    phase1 = false;
+                    phase = 0;
                 }
             }
         }
-        if(false)
+        else if(phase == 2)
         {
-            phase2 = false;
-            CryptStreamRead.BeginRead(receiveBuffer, 0, receiveBuffer.Length, new AsyncCallback(sReadCallback), CryptStreamRead);
+            Debug.Log("Phase 2: Waiting user to Login or SignUp");
+            //CryptStreamRead.BeginRead(receiveBuffer, 0, receiveBuffer.Length, new AsyncCallback(sReadCallback), CryptStreamRead);
+        }
+        else if(phase == 3)
+        {
+            Debug.Log("Phase 3: Waiting server to send back Login Success");
+            if(netStream.DataAvailable)
+            {
+                Debug.Log("Phase 3 netStream Data Available");
+                int numRead = netStream.Read(receiveBuffer, 0, receiveBuffer.Length);
+                Debug.Log("Phase3 numRead: " + numRead);
+                byte[] decryptedMessage = SymetricDecrypt(receiveBuffer, numRead, myKey, myIV);
+                string s = Encoding.ASCII.GetString(decryptedMessage);
+                Debug.Log("Read " + numRead + " bytes of security data: " + s);
+                int loginResult = BitConverter.ToInt32(decryptedMessage, 0);
+                if(loginResult == (int)StoCHeader.LoginSuccess)
+                {
+                    Debug.Log("Login Success!");
+                    phase = 5;
+                }
+                else if(loginResult == (int)StoCHeader.LoginFail)
+                {
+                    Debug.Log("Login Failure: " + Encoding.Default.GetString(decryptedMessage, 4, decryptedMessage.Length - 4));
+                    phase = 2;
+                }
+                else
+                {
+                    Debug.Log("Bad Header, shouldn't happen" + loginResult);
+                }
+            }
+        }
+        else if(phase == 4)
+        {
+            Debug.Log("Phase 4: Waiting server to send back SignUp Success");
+            if (netStream.DataAvailable)
+            {
+                Debug.Log("Phase 4 netStream Data Available");
+                int numRead = netStream.Read(receiveBuffer, 0, receiveBuffer.Length);
+                Debug.Log("Phase4 numRead: " + numRead);
+                byte[] decryptedMessage = SymetricDecrypt(receiveBuffer, numRead, myKey, myIV);
+                string s = Encoding.ASCII.GetString(decryptedMessage);
+                Debug.Log("Read " + numRead + " bytes of security data: " + s);
+                int signUpResult = BitConverter.ToInt32(decryptedMessage, 0);
+                if (signUpResult == (int)StoCHeader.SignUpSuccess)
+                {
+                    Debug.Log("Sign Up Success!");
+                    phase = 5;
+                }
+                else if (signUpResult == (int)StoCHeader.SignUpFail)
+                {
+                    Debug.Log("Sign Up Failure: " + Encoding.Default.GetString(decryptedMessage, 4, decryptedMessage.Length - 4));
+                    phase = 2;
+                }
+                else
+                {
+                    Debug.Log("Bad Header, shouldn't happen" + signUpResult);
+                }
+            }
+        }
+        else if(phase == 5)
+        {
+            Debug.Log("Phase 5: Login Success! Waiting for friend list");
+            if (netStream.DataAvailable)
+            {
+                Debug.Log("Phase 5 netStream Data Available");
+                int numRead = netStream.Read(receiveBuffer, 0, receiveBuffer.Length);
+                Debug.Log("Phase5 numRead: " + numRead);
+                byte[] decryptedMessage = SymetricDecrypt(receiveBuffer, numRead, myKey, myIV);
+                string s = Encoding.ASCII.GetString(decryptedMessage);
+                Debug.Log("Read " + numRead + " bytes of security data: " + s);
+                int counter = 0;
+                int prefix = BitConverter.ToInt32(decryptedMessage, 0);
+                counter += 4;
+                if (prefix == (int)StoCHeader.RenewFriend)
+                {
+                    Debug.Log("Receive Friend list!");
+                    int userNum = BitConverter.ToInt32(decryptedMessage, counter);
+                    counter += 4;
+                    for(int i = 0; i < userNum; i++)
+                    {
+                        int nameL = BitConverter.ToInt32(decryptedMessage, counter);
+                        counter += 4;
+                        string fName = Encoding.Default.GetString(decryptedMessage, counter, nameL);
+                        counter += nameL;
+                        UserItem u = new UserItem(fName, this);
+                        users.Add(fName, u);
+                    }
+                    displayController.LoadChatRoom();
+                    phase = 6;
+                }
+                else
+                {
+                    Debug.Log("Bad Header, shouldn't happen: " + prefix);
+                }
+            }
+        }
+        else if(phase == 6)
+        {
+            Debug.Log("Phase 6: Enter common routine");
+            if(netStream.DataAvailable)
+            {
+                Debug.Log("Phase 6 Data Available");
+                int numRead = netStream.Read(receiveBuffer, 0, receiveBuffer.Length);
+                Debug.Log("Phase6 numRead: " + numRead);
+                byte[] decryptedMessage = SymetricDecrypt(receiveBuffer, numRead, myKey, myIV);
+                string s = Encoding.ASCII.GetString(decryptedMessage);
+                Debug.Log("Read " + numRead + " bytes of security data: " + s);
+                int prefix = BitConverter.ToInt32(decryptedMessage, 0);
+                if(prefix == (int)StoCHeader.IncomingText)
+                {
+                    Debug.Log("Incoming Text");
+                    int nameL = BitConverter.ToInt32(decryptedMessage, 4);
+                    string fromUser = Encoding.Default.GetString(decryptedMessage, 8, nameL);
+                    string text = Encoding.Default.GetString(decryptedMessage, 8 + nameL, decryptedMessage.Length - 8 - nameL);
+                    bool converCreated = false;
+                    foreach(var c in conversations)
+                    {
+                        if(c.remoteName == fromUser)
+                        {
+                            converCreated = true;
+                            c.Read(text);
+                            break;
+                        }
+                    }
+                    if(converCreated == false)
+                    {
+                        Conversation con = new Conversation(null, fromUser, 0, this);
+                        con.SetupUI();
+                        conversations.Add(con);
+                        con.Read(text);
+                    }
+                }
+                else if(prefix == (int)StoCHeader.FriendOnline)
+                {
+                    Debug.Log("Friend Online");
+                    int fNameL = BitConverter.ToInt32(decryptedMessage, 4);
+                    string fName = Encoding.Default.GetString(decryptedMessage, 8, fNameL);
+                    UserItem u = new UserItem(fName, this);
+                    users.Add(fName, u);
+                    displayController.DisplayUser(u);
+                }
+                else if(prefix == (int)StoCHeader.FriendOffline)
+                {
+                    Debug.Log("Friend Offline");
+                    int fNameL = BitConverter.ToInt32(decryptedMessage, 4);
+                    string fName = Encoding.Default.GetString(decryptedMessage, 8, fNameL);
+                    if (users.ContainsKey(fName))
+                    {
+                        displayController.UndisplayUser(users[fName]);
+                        users.Remove(fName);
+                    }
+                }
+                else
+                {
+                    Debug.Log("Bad Header: " + prefix + ". Shouldn't happen.");
+
+                }
+            }
         }
 
 

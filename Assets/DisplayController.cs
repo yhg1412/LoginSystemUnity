@@ -18,7 +18,6 @@ public class DisplayController : MonoBehaviour {
     public GameObject TogglePrefab;
     public GameObject DialogPrefab;
 
-
     public toggleControl currentChat;
 
     private int numU;
