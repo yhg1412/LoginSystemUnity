@@ -25,6 +25,8 @@ public class ChatClient : MonoBehaviour
         IncomingText = 8,
         FriendOnline = 9,
         FriendOffline = 10,
+        AutoLoginSuccess = 11,
+        AutoLoginFail = 12,
     }
 
     enum CtoSHeader
@@ -35,6 +37,7 @@ public class ChatClient : MonoBehaviour
         SendText = 4,
         SignOut = 5,
         Connection = 19950114,
+        AutoLogin = 6,
     }
 
     public class UserItem
@@ -547,7 +550,7 @@ public class ChatClient : MonoBehaviour
         cryptoStream.Write(data, 0, dataLength);
         cryptoStream.FlushFinalBlock();
         byte[] result = memoryStream.ToArray();
-        Console.WriteLine("Encrypted data Length: " + result.Length);
+        Debug.Log("Encrypted data Length: " + result.Length);
         return result;
     }
 
@@ -560,7 +563,7 @@ public class ChatClient : MonoBehaviour
         cryptoStream.Write(data, 0, dataLength);
         cryptoStream.FlushFinalBlock();
         byte[] result = memoryStream.ToArray();
-        Console.WriteLine("Decrypted data Length: " + result.Length);
+        Debug.Log("Decrypted data Length: " + result.Length);
         return result;
     }
 
@@ -603,6 +606,10 @@ public class ChatClient : MonoBehaviour
         if (GUI.Button(new Rect(20, 20, 80, 20), "Connect"))
         {
             ConnectServer();
+        }
+        if (GUI.Button(new Rect(20, 50, 80, 20), "AutoLogin"))
+        {
+            AutoLogin();
         }
     }
 
@@ -659,6 +666,58 @@ public class ChatClient : MonoBehaviour
         phase = 2;
     }
 
+    public int SaveToken(string uName, string token)
+    {
+        FileStream fs = new FileStream("token.txt", FileMode.Create);
+        StreamWriter sw = new StreamWriter(fs);
+        sw.Write(uName);
+        sw.Write("\n");
+        sw.Write(token);
+        sw.Flush();
+        sw.Close();
+        fs.Close();
+        return 0;
+    }
+
+    public void AutoLogin()
+    {
+        phase = 0;
+        userName = Uname.text;
+        if(!File.Exists("token.txt"))
+        {
+            Debug.Log("Token doesn't exist");
+            phase = 2;
+            return;
+        }
+        FileStream fs = File.Open("token.txt", FileMode.Open);
+        StreamReader sr = new StreamReader(fs);
+        string tokenName = sr.ReadLine();
+        if(tokenName != userName)
+        {
+            Debug.Log("UserName doesn't match");
+            phase = 2;
+            return;
+        }
+        password = sr.ReadLine();
+        remoteUdpAddress = ServerIP.text;
+        remoteUdpPort = ushort.Parse(ServerPort.text);
+        byte[] header = BitConverter.GetBytes((int)CtoSHeader.AutoLogin);
+        byte[] nameBytes = Encoding.Default.GetBytes(userName);
+        byte[] pwdBytes = Encoding.Default.GetBytes(password);
+        byte[] nameL = BitConverter.GetBytes(nameBytes.Length);
+        byte[] pwdL = BitConverter.GetBytes(pwdBytes.Length);
+        byte[] bufferS = new byte[12 + nameBytes.Length + pwdBytes.Length];
+        header.CopyTo(bufferS, 0);
+        nameL.CopyTo(bufferS, 4);
+        pwdL.CopyTo(bufferS, 8);
+        nameBytes.CopyTo(bufferS, 12);
+        pwdBytes.CopyTo(bufferS, 12 + nameBytes.Length);
+        byte[] cbuffer = SymetricEncrypt(bufferS, bufferS.Length, myKey, myIV);
+        netStream.Write(cbuffer, 0, cbuffer.Length);
+        Debug.Log("Send AutoLogin Request!");
+        phase = 7;
+    }
+
     // Update is called once per frame
     void Update ()
     {
@@ -704,6 +763,8 @@ public class ChatClient : MonoBehaviour
                 int loginResult = BitConverter.ToInt32(decryptedMessage, 0);
                 if(loginResult == (int)StoCHeader.LoginSuccess)
                 {
+                    string token = Encoding.Default.GetString(decryptedMessage, 4, decryptedMessage.Length - 4);
+                    SaveToken(userName, token);
                     Debug.Log("Login Success!");
                     phase = 5;
                 }
@@ -732,6 +793,8 @@ public class ChatClient : MonoBehaviour
                 int signUpResult = BitConverter.ToInt32(decryptedMessage, 0);
                 if (signUpResult == (int)StoCHeader.SignUpSuccess)
                 {
+                    string token = Encoding.Default.GetString(decryptedMessage, 4, decryptedMessage.Length - 4);
+                    SaveToken(userName, token);
                     Debug.Log("Sign Up Success!");
                     phase = 5;
                 }
@@ -780,6 +843,34 @@ public class ChatClient : MonoBehaviour
                 else
                 {
                     Debug.Log("Bad Header, shouldn't happen: " + prefix);
+                }
+            }
+        }
+        else if(phase == 7)
+        {
+            Debug.Log("Phase 7: Wating server to send back autoLogin Result");
+            if(netStream.DataAvailable)
+            {
+                Debug.Log("Phase 7 Data Available");
+                int numRead = netStream.Read(receiveBuffer, 0, receiveBuffer.Length);
+                Debug.Log("Phase7 numRead: " + numRead);
+                byte[] decryptedMessage = SymetricDecrypt(receiveBuffer, numRead, myKey, myIV);
+                string s = Encoding.ASCII.GetString(decryptedMessage);
+                Debug.Log("Read " + numRead + " bytes of security data: " + s);
+                int autoLoginResult = BitConverter.ToInt32(decryptedMessage, 0);
+                if (autoLoginResult == (int)StoCHeader.AutoLoginSuccess)
+                {
+                    Debug.Log("AutoLogin Success!");
+                    phase = 5;
+                }
+                else if (autoLoginResult == (int)StoCHeader.AutoLoginFail)
+                {
+                    Debug.Log("AutoLogin Failure: " + Encoding.Default.GetString(decryptedMessage, 4, decryptedMessage.Length - 4));
+                    phase = 2;
+                }
+                else
+                {
+                    Debug.Log("Bad Header, shouldn't happen" + autoLoginResult);
                 }
             }
         }

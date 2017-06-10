@@ -28,7 +28,7 @@ namespace UIControllerExamples.Popup {
 			child.Hide ();
 		}
 		private UIController GetChild (string path) {
-			Transform child = this.transform.FindChild (path);
+			Transform child = this.transform.Find (path);
 			if (child == null) {
 				return null;
 			}
